@@ -5,7 +5,15 @@ const path = require("path");
 const PORT = Number(process.env.PORT || 4173);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
+const SYSTEM_PROMPT = [
+  "You are Woodhouse, Jorge's JARVIS-style local assistant.",
+  "Be concise, capable, calm, and practical. Speak like a useful copilot, not a chatbot demo.",
+  "Use the conversation and local memory to personalize answers.",
+  "When the user asks for action, explain what you can do now and what needs a future tool.",
+  "Never claim you performed OS, browser, file, or network actions unless the tool context says they happened.",
+  "If a request is vague, make one useful assumption and continue."
+].join(" ");
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -42,8 +50,13 @@ function readRequestBody(req) {
 
 async function askOpenAI(messages, memory) {
   if (!OPENAI_API_KEY) {
-    return null;
+    throw new Error("OPENAI_API_KEY is not set.");
   }
+
+  const conversation = messages.slice(-16).map(message => ({
+    role: message.role === "assistant" ? "assistant" : "user",
+    content: message.content
+  }));
 
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -53,25 +66,15 @@ async function askOpenAI(messages, memory) {
     },
     body: JSON.stringify({
       model: OPENAI_MODEL,
+      instructions: SYSTEM_PROMPT,
       input: [
         {
-          role: "system",
-          content:
-            "You are Woodhouse, a JARVIS-style local assistant. Be concise, capable, calm, and practical. " +
-            "You can suggest actions, summarize plans, and remember user preferences provided in context. " +
-            "Never claim you performed OS actions unless the local tool context says they happened."
-        },
-        {
           role: "user",
-          content: `Known local memory:\n${memory || "No stored memory yet."}`
+          content: `Local memory:\n${memory || "No stored memory yet."}`
         },
-        ...messages.slice(-12).map(message => ({
-          role: message.role === "assistant" ? "assistant" : "user",
-          content: message.content
-        }))
+        ...conversation
       ],
-      temperature: 0.5,
-      max_output_tokens: 450
+      max_output_tokens: 650
     })
   });
 
@@ -121,6 +124,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && req.url === "/api/chat") {
+      if (!OPENAI_API_KEY) {
+        sendJson(res, 401, { error: "OPENAI_API_KEY is not set on the server." });
+        return;
+      }
+
       const body = await readRequestBody(req);
       const payload = JSON.parse(body || "{}");
       const aiText = await askOpenAI(payload.messages || [], payload.memory || "");

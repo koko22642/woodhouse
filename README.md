@@ -21,6 +21,9 @@ GitHub Pages.
 
 ## Optional AI backend
 
+For smart mode, run Woodhouse locally with an OpenAI API key. Keep this key off
+GitHub Pages; Pages is static and cannot safely hide secrets.
+
 Set `OPENAI_API_KEY` before starting the server:
 
 ```powershell
@@ -28,7 +31,14 @@ $env:OPENAI_API_KEY = "your_api_key"
 npm start
 ```
 
-You can also set `OPENAI_MODEL`; otherwise the server uses `gpt-4.1-mini`.
+You can also set `OPENAI_MODEL`; otherwise the server uses `gpt-5.4-mini`.
+
+```powershell
+$env:OPENAI_MODEL = "gpt-5.4-mini"
+```
+
+When smart mode is active, the Systems panel shows the model name instead of
+`Local`.
 
 ## Current commands
 

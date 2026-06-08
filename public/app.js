@@ -151,9 +151,14 @@ async function handleCommand(command) {
 
   let reply;
   try {
+    if (aiOnline) {
+      directive.textContent = "Thinking.";
+    }
     reply = aiOnline ? await remoteReply() : localReply(command);
   } catch (error) {
     reply = `${localReply(command)} Backend note: ${error.message}`;
+  } finally {
+    directive.textContent = command;
   }
 
   addMessage("assistant", reply);
