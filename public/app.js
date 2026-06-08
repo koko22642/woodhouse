@@ -10,6 +10,10 @@ const voiceOutputStatus = document.querySelector("#voiceOutputStatus");
 const memoryList = document.querySelector("#memoryList");
 const notesList = document.querySelector("#notesList");
 const remindersList = document.querySelector("#remindersList");
+const syncStatus = document.querySelector("#syncStatus");
+const syncForm = document.querySelector("#syncForm");
+const syncKeyInput = document.querySelector("#syncKeyInput");
+const syncNowButton = document.querySelector("#syncNowButton");
 const micButton = document.querySelector("#micButton");
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -18,10 +22,13 @@ const storageKey = "woodhouse.memory";
 const transcriptKey = "woodhouse.transcript";
 const notesKey = "woodhouse.notes";
 const remindersKey = "woodhouse.reminders";
+const syncKeyStorageKey = "woodhouse.syncKey";
 
 let recognition = null;
 let isListening = false;
 let aiOnline = false;
+let syncAvailable = false;
+let syncKey = localStorage.getItem(syncKeyStorageKey) || "";
 let messages = loadJson(transcriptKey, []);
 let memory = loadJson(storageKey, [
   "Call the assistant Woodhouse.",
@@ -43,6 +50,10 @@ function saveState() {
   localStorage.setItem(transcriptKey, JSON.stringify(messages.slice(-50)));
   localStorage.setItem(notesKey, JSON.stringify(notes.slice(0, 25)));
   localStorage.setItem(remindersKey, JSON.stringify(reminders.slice(0, 25)));
+}
+
+function setSyncStatus(text) {
+  syncStatus.textContent = text;
 }
 
 function addMessage(role, content) {
@@ -98,6 +109,90 @@ function createEntry(text) {
     text,
     createdAt: new Date().toISOString()
   };
+}
+
+function mergeEntries(existing = [], incoming = []) {
+  const merged = new Map();
+  for (const entry of [...incoming, ...existing]) {
+    if (!entry?.text) {
+      continue;
+    }
+    const id = entry.id || entry.text.toLowerCase();
+    merged.set(id, {
+      id,
+      text: entry.text,
+      createdAt: entry.createdAt || new Date().toISOString()
+    });
+  }
+  return [...merged.values()]
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, 25);
+}
+
+function mergeMemory(existing = [], incoming = []) {
+  return [...new Set([...incoming, ...existing].filter(Boolean))].slice(0, 10);
+}
+
+async function syncNow(announce = false) {
+  if (!syncAvailable) {
+    setSyncStatus("Unavailable");
+    if (announce) {
+      addMessage("assistant", "Sync is not configured on this server yet.");
+    }
+    return false;
+  }
+
+  if (!syncKey) {
+    setSyncStatus("Needs key");
+    if (announce) {
+      addMessage("assistant", "Enter your sync key first.");
+    }
+    return false;
+  }
+
+  setSyncStatus("Syncing");
+
+  try {
+    const response = await fetch("/api/sync", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-woodhouse-sync-key": syncKey
+      },
+      body: JSON.stringify({ memory, notes, reminders })
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || "Sync failed.");
+    }
+
+    const data = await response.json();
+    memory = mergeMemory(memory, data.memory || []);
+    notes = mergeEntries(notes, data.notes || []);
+    reminders = mergeEntries(reminders, data.reminders || []);
+    saveState();
+    renderMemory();
+    renderTools();
+    setSyncStatus("On");
+
+    if (announce) {
+      addMessage("assistant", "Sync complete.");
+    }
+    return true;
+  } catch (error) {
+    setSyncStatus("Error");
+    if (announce) {
+      addMessage("assistant", `Sync failed: ${error.message}`);
+    }
+    return false;
+  }
+}
+
+function scheduleSync() {
+  if (syncAvailable && syncKey) {
+    syncNow(false);
+  }
 }
 
 function speak(text) {
@@ -170,6 +265,7 @@ function runTool(command) {
     notes.unshift(createEntry(text));
     renderTools();
     saveState();
+    scheduleSync();
     return `Noted: ${text}`;
   }
 
@@ -179,6 +275,7 @@ function runTool(command) {
     reminders.unshift(createEntry(text));
     renderTools();
     saveState();
+    scheduleSync();
     return `Reminder added: ${text}`;
   }
 
@@ -189,6 +286,7 @@ function runTool(command) {
       memory = [...new Set(memory)].slice(0, 10);
       renderMemory();
       saveState();
+      scheduleSync();
       return `Remembered: ${item}`;
     }
   }
@@ -328,9 +426,12 @@ async function boot() {
     const response = await fetch("/api/status");
     const data = await response.json();
     aiOnline = data.aiOnline;
+    syncAvailable = Boolean(data.syncEnabled);
     aiStatus.textContent = aiOnline ? data.model : "Local";
+    setSyncStatus(syncAvailable ? (syncKey ? "On" : "Needs key") : "Off");
   } catch {
     aiStatus.textContent = "Local";
+    setSyncStatus("Off");
   }
 
   statusEl.classList.add("online");
@@ -338,6 +439,11 @@ async function boot() {
 
   if (!messages.length) {
     addMessage("assistant", "Good evening. Woodhouse is online.");
+  }
+
+  if (syncKey) {
+    syncKeyInput.value = syncKey;
+    syncNow(false);
   }
 }
 
@@ -355,6 +461,21 @@ micButton.addEventListener("click", () => {
 
 document.querySelectorAll("[data-command]").forEach(button => {
   button.addEventListener("click", () => handleCommand(button.dataset.command));
+});
+
+syncForm.addEventListener("submit", event => {
+  event.preventDefault();
+  syncKey = syncKeyInput.value.trim();
+  if (syncKey) {
+    localStorage.setItem(syncKeyStorageKey, syncKey);
+  } else {
+    localStorage.removeItem(syncKeyStorageKey);
+  }
+  syncNow(true);
+});
+
+syncNowButton.addEventListener("click", () => {
+  syncNow(true);
 });
 
 boot();

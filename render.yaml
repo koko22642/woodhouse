@@ -11,3 +11,5 @@ services:
         value: gpt-5.4-mini
       - key: OPENAI_API_KEY
         sync: false
+      - key: WOODHOUSE_SYNC_KEY
+        sync: false

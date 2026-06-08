@@ -71,6 +71,25 @@
             <span>AI backend</span>
             <strong id="aiStatus">Local</strong>
           </div>
+          <div class="metric">
+            <span>Sync</span>
+            <strong id="syncStatus">Off</strong>
+          </div>
+        </section>
+
+        <section>
+          <h2>Sync</h2>
+          <form class="sync-form" id="syncForm">
+            <input
+              id="syncKeyInput"
+              type="password"
+              autocomplete="off"
+              placeholder="Sync key"
+              aria-label="Sync key"
+            />
+            <button type="submit">Connect</button>
+          </form>
+          <button class="wide-button" type="button" id="syncNowButton">Sync Now</button>
         </section>
 
         <section>

@@ -4,12 +4,20 @@ const path = require("path");
 
 const PORT = Number(process.env.PORT || 4173);
 const PUBLIC_DIR = path.join(__dirname, "public");
+const DATA_DIR = process.env.WOODHOUSE_DATA_DIR || path.join(__dirname, "data");
+const STORE_PATH = path.join(DATA_DIR, "woodhouse-store.json");
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
+const WOODHOUSE_SYNC_KEY = process.env.WOODHOUSE_SYNC_KEY;
 const hasRealApiKey = Boolean(
   OPENAI_API_KEY &&
     OPENAI_API_KEY !== "your_api_key_here" &&
     OPENAI_API_KEY !== "replace_me"
+);
+const hasSyncKey = Boolean(
+  WOODHOUSE_SYNC_KEY &&
+    WOODHOUSE_SYNC_KEY !== "your_sync_key_here" &&
+    WOODHOUSE_SYNC_KEY !== "replace_me"
 );
 const SYSTEM_PROMPT = [
   "You are Woodhouse, Jorge's JARVIS-style local assistant.",
@@ -51,6 +59,77 @@ function readRequestBody(req) {
     req.on("end", () => resolve(body));
     req.on("error", reject);
   });
+}
+
+function readStore() {
+  try {
+    return JSON.parse(fs.readFileSync(STORE_PATH, "utf8"));
+  } catch {
+    return { memory: [], notes: [], reminders: [] };
+  }
+}
+
+function writeStore(store) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2));
+}
+
+function isSyncAuthorized(req) {
+  return hasSyncKey && req.headers["x-woodhouse-sync-key"] === WOODHOUSE_SYNC_KEY;
+}
+
+function cleanText(value) {
+  return typeof value === "string" ? value.trim().slice(0, 500) : "";
+}
+
+function normalizeEntry(entry) {
+  if (typeof entry === "string") {
+    const text = cleanText(entry);
+    return text ? { id: text.toLowerCase(), text, createdAt: new Date().toISOString() } : null;
+  }
+
+  const text = cleanText(entry?.text);
+  if (!text) {
+    return null;
+  }
+
+  return {
+    id: cleanText(entry.id) || text.toLowerCase(),
+    text,
+    createdAt: cleanText(entry.createdAt) || new Date().toISOString()
+  };
+}
+
+function mergeEntries(existing = [], incoming = [], limit = 50) {
+  const merged = new Map();
+
+  for (const entry of [...existing, ...incoming]) {
+    const normalized = normalizeEntry(entry);
+    if (!normalized) {
+      continue;
+    }
+    const key = normalized.id || normalized.text.toLowerCase();
+    merged.set(key, normalized);
+  }
+
+  return [...merged.values()]
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, limit);
+}
+
+function mergeMemory(existing = [], incoming = []) {
+  const items = [...incoming, ...existing]
+    .map(cleanText)
+    .filter(Boolean);
+  return [...new Set(items)].slice(0, 25);
+}
+
+function mergeStore(existing, incoming) {
+  return {
+    memory: mergeMemory(existing.memory, incoming.memory),
+    notes: mergeEntries(existing.notes, incoming.notes),
+    reminders: mergeEntries(existing.reminders, incoming.reminders)
+  };
 }
 
 function extractResponseText(data) {
@@ -149,13 +228,38 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/api/status") {
       sendJson(res, 200, {
         aiOnline: hasRealApiKey,
-        model: hasRealApiKey ? OPENAI_MODEL : null
+        model: hasRealApiKey ? OPENAI_MODEL : null,
+        syncEnabled: hasSyncKey
       });
       return;
     }
 
     if (req.method === "GET" && req.url === "/api/health") {
       sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/api/sync") {
+      if (!isSyncAuthorized(req)) {
+        sendJson(res, 401, { error: "Woodhouse sync is not configured or the sync key is incorrect." });
+        return;
+      }
+
+      sendJson(res, 200, readStore());
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/sync") {
+      if (!isSyncAuthorized(req)) {
+        sendJson(res, 401, { error: "Woodhouse sync is not configured or the sync key is incorrect." });
+        return;
+      }
+
+      const body = await readRequestBody(req);
+      const incoming = JSON.parse(body || "{}");
+      const store = mergeStore(readStore(), incoming);
+      writeStore(store);
+      sendJson(res, 200, store);
       return;
     }
 
@@ -189,4 +293,5 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Woodhouse JARVIS is online at http://localhost:${PORT}`);
   console.log(hasRealApiKey ? `AI backend: ${OPENAI_MODEL}` : "AI backend: local fallback mode");
+  console.log(hasSyncKey ? "Sync backend: enabled" : "Sync backend: disabled");
 });
