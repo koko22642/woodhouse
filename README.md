@@ -73,6 +73,7 @@ When smart mode is active, the Systems panel shows the model name instead of
 - `due today`
 - `overdue reminders`
 - `complete reminder 1`
+- `test notification`
 - `clear reminders`
 - `daily brief`
 - `clear memory`

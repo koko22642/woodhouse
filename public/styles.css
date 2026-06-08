@@ -284,6 +284,10 @@ input:focus {
   margin-top: 10px;
 }
 
+.wide-button + .wide-button {
+  margin-top: 8px;
+}
+
 .panel {
   display: flex;
   flex-direction: column;

@@ -14,6 +14,9 @@ const syncStatus = document.querySelector("#syncStatus");
 const syncForm = document.querySelector("#syncForm");
 const syncKeyInput = document.querySelector("#syncKeyInput");
 const syncNowButton = document.querySelector("#syncNowButton");
+const notificationStatus = document.querySelector("#notificationStatus");
+const enableNotificationsButton = document.querySelector("#enableNotificationsButton");
+const testNotificationsButton = document.querySelector("#testNotificationsButton");
 const micButton = document.querySelector("#micButton");
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -23,12 +26,15 @@ const transcriptKey = "woodhouse.transcript";
 const notesKey = "woodhouse.notes";
 const remindersKey = "woodhouse.reminders";
 const syncKeyStorageKey = "woodhouse.syncKey";
+const notifiedRemindersKey = "woodhouse.notifiedReminders";
 
 let recognition = null;
 let isListening = false;
 let aiOnline = false;
 let syncAvailable = false;
 let syncKey = localStorage.getItem(syncKeyStorageKey) || "";
+let serviceWorkerRegistration = null;
+let notifiedReminders = loadJson(notifiedRemindersKey, []);
 let messages = loadJson(transcriptKey, []);
 let memory = loadJson(storageKey, [
   "Call the assistant Woodhouse.",
@@ -50,10 +56,15 @@ function saveState() {
   localStorage.setItem(transcriptKey, JSON.stringify(messages.slice(-50)));
   localStorage.setItem(notesKey, JSON.stringify(notes.slice(0, 25)));
   localStorage.setItem(remindersKey, JSON.stringify(reminders.slice(0, 25)));
+  localStorage.setItem(notifiedRemindersKey, JSON.stringify(notifiedReminders.slice(0, 100)));
 }
 
 function setSyncStatus(text) {
   syncStatus.textContent = text;
+}
+
+function setNotificationStatus(text) {
+  notificationStatus.textContent = text;
 }
 
 function addMessage(role, content) {
@@ -257,6 +268,11 @@ function overdueReminders() {
   return activeReminders().filter(reminder => reminder.dueAt && new Date(reminder.dueAt) < now);
 }
 
+function dueNowReminders() {
+  const now = new Date();
+  return activeReminders().filter(reminder => reminder.dueAt && new Date(reminder.dueAt) <= now);
+}
+
 function mergeEntries(existing = [], incoming = []) {
   const merged = new Map();
   for (const entry of [...incoming, ...existing]) {
@@ -344,6 +360,85 @@ function scheduleSync() {
   }
 }
 
+async function setupNotifications() {
+  if (!("Notification" in window)) {
+    setNotificationStatus("Unavailable");
+    enableNotificationsButton.disabled = true;
+    testNotificationsButton.disabled = true;
+    return;
+  }
+
+  if ("serviceWorker" in navigator) {
+    try {
+      serviceWorkerRegistration = await navigator.serviceWorker.register("sw.js");
+    } catch {
+      serviceWorkerRegistration = null;
+    }
+  }
+
+  setNotificationStatus(Notification.permission === "granted" ? "On" : "Off");
+}
+
+async function requestNotificationPermission() {
+  if (!("Notification" in window)) {
+    setNotificationStatus("Unavailable");
+    addMessage("assistant", "Notifications are not available in this browser.");
+    return false;
+  }
+
+  const permission = await Notification.requestPermission();
+  setNotificationStatus(permission === "granted" ? "On" : "Blocked");
+
+  if (permission === "granted") {
+    addMessage("assistant", "Notifications enabled.");
+    await sendNotification("Woodhouse notifications enabled", "I will notify you when reminders become due while Woodhouse is open.");
+    return true;
+  }
+
+  addMessage("assistant", "Notifications were not enabled.");
+  return false;
+}
+
+async function sendNotification(title, body) {
+  if (!("Notification" in window) || Notification.permission !== "granted") {
+    return false;
+  }
+
+  const options = {
+    body,
+    tag: title,
+    renotify: true
+  };
+
+  if (serviceWorkerRegistration?.showNotification) {
+    await serviceWorkerRegistration.showNotification(title, options);
+    return true;
+  }
+
+  new Notification(title, options);
+  return true;
+}
+
+async function checkDueNotifications() {
+  if (!("Notification" in window) || Notification.permission !== "granted") {
+    return;
+  }
+
+  const due = dueNowReminders();
+  for (const reminder of due) {
+    const key = `${reminder.id}:${reminder.dueAt || "no-date"}`;
+    if (notifiedReminders.includes(key)) {
+      continue;
+    }
+
+    notifiedReminders.unshift(key);
+    await sendNotification("Woodhouse reminder", reminder.text);
+    addMessage("assistant", `Reminder due: ${reminder.text}`);
+  }
+
+  saveState();
+}
+
 function speak(text) {
   if (!synth) {
     voiceOutputStatus.textContent = "Unavailable";
@@ -373,6 +468,15 @@ function runTool(command) {
       dueToday.length ? `Due today: ${dueToday.map(formatEntry).join("; ")}.` : "Nothing due today.",
       aiOnline ? "AI backend is online." : "AI backend is in local mode."
     ].join(" ");
+  }
+
+  if (lower === "test notification") {
+    sendNotification("Woodhouse test", "Notifications are working.").then(sent => {
+      if (!sent) {
+        addMessage("assistant", "Notifications are not enabled yet. Use the Enable button first.");
+      }
+    });
+    return "Testing notifications.";
   }
 
   if (lower === "clear memory") {
@@ -450,7 +554,7 @@ function runTool(command) {
       return `Completed and rescheduled: ${formatEntry(reminder)}`;
     }
 
-    reminder.completedAt = new Date().toISOString();
+      reminder.completedAt = new Date().toISOString();
     renderTools();
     saveState();
     scheduleSync();
@@ -608,6 +712,7 @@ function setupVoiceInput() {
 
 async function boot() {
   setupVoiceInput();
+  setupNotifications();
   renderMemory();
   renderTools();
 
@@ -645,6 +750,9 @@ async function boot() {
     syncKeyInput.value = syncKey;
     syncNow(false);
   }
+
+  checkDueNotifications();
+  window.setInterval(checkDueNotifications, 60_000);
 }
 
 composer.addEventListener("submit", event => {
@@ -676,6 +784,16 @@ syncForm.addEventListener("submit", event => {
 
 syncNowButton.addEventListener("click", () => {
   syncNow(true);
+});
+
+enableNotificationsButton.addEventListener("click", () => {
+  requestNotificationPermission();
+});
+
+testNotificationsButton.addEventListener("click", () => {
+  sendNotification("Woodhouse test", "Notifications are working.").then(sent => {
+    addMessage("assistant", sent ? "Test notification sent." : "Enable notifications first.");
+  });
 });
 
 boot();
