@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Woodhouse</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="console" aria-label="Woodhouse assistant console">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Woodhouse</p>
+            <h1>JARVIS console</h1>
+          </div>
+          <div class="status" id="status">
+            <span class="status-dot"></span>
+            <span id="statusText">Booting</span>
+          </div>
+        </header>
+
+        <section class="core">
+          <div class="orb-wrap" aria-hidden="true">
+            <div class="orb">
+              <div class="ring ring-one"></div>
+              <div class="ring ring-two"></div>
+              <div class="ring ring-three"></div>
+              <div class="core-light"></div>
+            </div>
+          </div>
+
+          <div class="readout">
+            <p class="label">Current directive</p>
+            <p id="directive">Awaiting command.</p>
+          </div>
+        </section>
+
+        <section class="quick-actions" aria-label="Quick actions">
+          <button data-command="status report">Status</button>
+          <button data-command="what can you do">Abilities</button>
+          <button data-command="remember I prefer concise answers">Remember</button>
+          <button data-command="clear memory">Clear Memory</button>
+        </section>
+
+        <section class="conversation" id="conversation" aria-live="polite"></section>
+
+        <form class="composer" id="composer">
+          <button class="icon-button" type="button" id="micButton" aria-label="Start voice input" title="Voice input">
+            <span>●</span>
+          </button>
+          <input id="commandInput" autocomplete="off" placeholder="Give Woodhouse a command..." />
+          <button type="submit">Send</button>
+        </form>
+      </section>
+
+      <aside class="panel" aria-label="Assistant systems">
+        <section>
+          <h2>Systems</h2>
+          <div class="metric">
+            <span>Voice input</span>
+            <strong id="voiceInputStatus">Checking</strong>
+          </div>
+          <div class="metric">
+            <span>Voice output</span>
+            <strong id="voiceOutputStatus">Ready</strong>
+          </div>
+          <div class="metric">
+            <span>AI backend</span>
+            <strong id="aiStatus">Local</strong>
+          </div>
+        </section>
+
+        <section>
+          <h2>Memory</h2>
+          <ul class="memory-list" id="memoryList"></ul>
+        </section>
+
+        <section>
+          <h2>Tools</h2>
+          <ul class="tool-list">
+            <li>Conversation</li>
+            <li>Local memory</li>
+            <li>Speech synthesis</li>
+            <li>Browser commands</li>
+            <li>Optional OpenAI backend</li>
+          </ul>
+        </section>
+      </aside>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
