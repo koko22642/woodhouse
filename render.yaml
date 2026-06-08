@@ -13,3 +13,9 @@ services:
         sync: false
       - key: WOODHOUSE_SYNC_KEY
         sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        value: mailto:you@example.com

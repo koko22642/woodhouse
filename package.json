@@ -5,7 +5,11 @@
   "description": "A local JARVIS-style assistant prototype for Woodhouse.",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "vapid": "node scripts/generate-vapid-keys.js"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
   },
   "engines": {
     "node": ">=18"

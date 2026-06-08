@@ -29,13 +29,23 @@ On Render:
 1. Create a new Blueprint from this GitHub repo.
 2. Set the `OPENAI_API_KEY` environment variable when Render asks for it.
 3. Set `WOODHOUSE_SYNC_KEY` to a private phrase you will enter on each device.
-4. Deploy the service.
+4. Set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` for background push.
+5. Deploy the service.
 
 Render will provide a public URL like `https://woodhouse.onrender.com`.
 Open that URL on your phone for smart mode.
 
 Enter the same sync key in the Woodhouse Sync panel on every device to share
 memory, notes, and reminders through the backend.
+
+Generate VAPID keys locally after installing dependencies:
+
+```powershell
+node scripts/generate-vapid-keys.js
+```
+
+Use the generated `publicKey` and `privateKey` in Render. `VAPID_SUBJECT` can be
+an email-style value like `mailto:you@example.com`.
 
 ## Optional AI backend
 

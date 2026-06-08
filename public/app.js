@@ -15,6 +15,7 @@ const syncForm = document.querySelector("#syncForm");
 const syncKeyInput = document.querySelector("#syncKeyInput");
 const syncNowButton = document.querySelector("#syncNowButton");
 const notificationStatus = document.querySelector("#notificationStatus");
+const pushStatus = document.querySelector("#pushStatus");
 const enableNotificationsButton = document.querySelector("#enableNotificationsButton");
 const testNotificationsButton = document.querySelector("#testNotificationsButton");
 const micButton = document.querySelector("#micButton");
@@ -32,6 +33,8 @@ let recognition = null;
 let isListening = false;
 let aiOnline = false;
 let syncAvailable = false;
+let pushAvailable = false;
+let pushPublicKey = null;
 let syncKey = localStorage.getItem(syncKeyStorageKey) || "";
 let serviceWorkerRegistration = null;
 let notifiedReminders = loadJson(notifiedRemindersKey, []);
@@ -65,6 +68,10 @@ function setSyncStatus(text) {
 
 function setNotificationStatus(text) {
   notificationStatus.textContent = text;
+}
+
+function setPushStatus(text) {
+  pushStatus.textContent = text;
 }
 
 function addMessage(role, content) {
@@ -371,12 +378,90 @@ async function setupNotifications() {
   if ("serviceWorker" in navigator) {
     try {
       serviceWorkerRegistration = await navigator.serviceWorker.register("sw.js");
+      await navigator.serviceWorker.ready;
     } catch {
       serviceWorkerRegistration = null;
     }
   }
 
   setNotificationStatus(Notification.permission === "granted" ? "On" : "Off");
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let index = 0; index < rawData.length; index += 1) {
+    outputArray[index] = rawData.charCodeAt(index);
+  }
+
+  return outputArray;
+}
+
+async function loadPushConfig() {
+  try {
+    const response = await fetch("/api/push/public-key");
+    const data = await response.json();
+    pushAvailable = Boolean(data.enabled && data.publicKey);
+    pushPublicKey = data.publicKey;
+    setPushStatus(pushAvailable ? "Ready" : "Unavailable");
+  } catch {
+    pushAvailable = false;
+    pushPublicKey = null;
+    setPushStatus("Unavailable");
+  }
+}
+
+async function subscribeToBackgroundPush() {
+  if (!pushAvailable || !pushPublicKey) {
+    setPushStatus("Unavailable");
+    addMessage("assistant", "Background push is not configured on this server yet.");
+    return false;
+  }
+
+  if (!syncKey) {
+    setPushStatus("Needs key");
+    addMessage("assistant", "Enter your sync key before enabling background push.");
+    return false;
+  }
+
+  if (!serviceWorkerRegistration) {
+    setPushStatus("No worker");
+    addMessage("assistant", "Background push needs service worker support in this browser.");
+    return false;
+  }
+
+  const permissionGranted = Notification.permission === "granted" || (await requestNotificationPermission());
+  if (!permissionGranted) {
+    return false;
+  }
+
+  const subscription =
+    (await serviceWorkerRegistration.pushManager.getSubscription()) ||
+    (await serviceWorkerRegistration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(pushPublicKey)
+    }));
+
+  const response = await fetch("/api/push/subscribe", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-woodhouse-sync-key": syncKey
+    },
+    body: JSON.stringify(subscription)
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || "Push subscription failed.");
+  }
+
+  setPushStatus("On");
+  addMessage("assistant", "Background push enabled on this device.");
+  return true;
 }
 
 async function requestNotificationPermission() {
@@ -417,6 +502,31 @@ async function sendNotification(title, body) {
 
   new Notification(title, options);
   return true;
+}
+
+async function sendBackgroundPushTest() {
+  if (!syncKey) {
+    addMessage("assistant", "Enter your sync key before testing background push.");
+    return false;
+  }
+
+  const response = await fetch("/api/push/test", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-woodhouse-sync-key": syncKey
+    }
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    addMessage("assistant", `Background push test failed: ${data.error || "Unknown error."}`);
+    return false;
+  }
+
+  const data = await response.json();
+  addMessage("assistant", data.sent ? "Background push test sent." : "No subscribed devices received the test.");
+  return Boolean(data.sent);
 }
 
 async function checkDueNotifications() {
@@ -732,11 +842,14 @@ async function boot() {
     const data = await response.json();
     aiOnline = data.aiOnline;
     syncAvailable = Boolean(data.syncEnabled);
+    pushAvailable = Boolean(data.pushEnabled);
     aiStatus.textContent = aiOnline ? data.model : "Local";
     setSyncStatus(syncAvailable ? (syncKey ? "On" : "Needs key") : "Off");
+    setPushStatus(pushAvailable ? "Ready" : "Unavailable");
   } catch {
     aiStatus.textContent = "Local";
     setSyncStatus("Off");
+    setPushStatus("Unavailable");
   }
 
   statusEl.classList.add("online");
@@ -751,6 +864,7 @@ async function boot() {
     syncNow(false);
   }
 
+  loadPushConfig();
   checkDueNotifications();
   window.setInterval(checkDueNotifications, 60_000);
 }
@@ -787,12 +901,21 @@ syncNowButton.addEventListener("click", () => {
 });
 
 enableNotificationsButton.addEventListener("click", () => {
-  requestNotificationPermission();
+  subscribeToBackgroundPush().catch(error => {
+    setPushStatus("Error");
+    addMessage("assistant", `Background push failed: ${error.message}`);
+  });
 });
 
 testNotificationsButton.addEventListener("click", () => {
-  sendNotification("Woodhouse test", "Notifications are working.").then(sent => {
-    addMessage("assistant", sent ? "Test notification sent." : "Enable notifications first.");
+  sendBackgroundPushTest().then(sent => {
+    if (!sent) {
+      sendNotification("Woodhouse test", "Notifications are working.").then(localSent => {
+        if (localSent) {
+          addMessage("assistant", "Local notification test sent.");
+        }
+      });
+    }
   });
 });
 

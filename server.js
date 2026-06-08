@@ -1,6 +1,13 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+let webpush = null;
+
+try {
+  webpush = require("web-push");
+} catch {
+  webpush = null;
+}
 
 const PORT = Number(process.env.PORT || 4173);
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -9,6 +16,9 @@ const STORE_PATH = path.join(DATA_DIR, "woodhouse-store.json");
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 const WOODHOUSE_SYNC_KEY = process.env.WOODHOUSE_SYNC_KEY;
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:you@example.com";
 const hasRealApiKey = Boolean(
   OPENAI_API_KEY &&
     OPENAI_API_KEY !== "your_api_key_here" &&
@@ -19,6 +29,17 @@ const hasSyncKey = Boolean(
     WOODHOUSE_SYNC_KEY !== "your_sync_key_here" &&
     WOODHOUSE_SYNC_KEY !== "replace_me"
 );
+const hasPushBackend = Boolean(
+  webpush &&
+    VAPID_PUBLIC_KEY &&
+    VAPID_PRIVATE_KEY &&
+    VAPID_PUBLIC_KEY !== "replace_me" &&
+    VAPID_PRIVATE_KEY !== "replace_me"
+);
+
+if (hasPushBackend) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+}
 const SYSTEM_PROMPT = [
   "You are Woodhouse, Jorge's JARVIS-style local assistant.",
   "Be concise, capable, calm, and practical. Speak like a useful copilot, not a chatbot demo.",
@@ -65,7 +86,7 @@ function readStore() {
   try {
     return JSON.parse(fs.readFileSync(STORE_PATH, "utf8"));
   } catch {
-    return { memory: [], notes: [], reminders: [] };
+    return { memory: [], notes: [], reminders: [], pushSubscriptions: [], notifiedPushKeys: [] };
   }
 }
 
@@ -103,6 +124,21 @@ function normalizeEntry(entry) {
   };
 }
 
+function normalizePushSubscription(subscription) {
+  if (!subscription?.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) {
+    return null;
+  }
+
+  return {
+    endpoint: String(subscription.endpoint),
+    expirationTime: subscription.expirationTime || null,
+    keys: {
+      p256dh: String(subscription.keys.p256dh),
+      auth: String(subscription.keys.auth)
+    }
+  };
+}
+
 function mergeEntries(existing = [], incoming = [], limit = 50) {
   const merged = new Map();
 
@@ -131,8 +167,69 @@ function mergeStore(existing, incoming) {
   return {
     memory: mergeMemory(existing.memory, incoming.memory),
     notes: mergeEntries(existing.notes, incoming.notes),
-    reminders: mergeEntries(existing.reminders, incoming.reminders)
+    reminders: mergeEntries(existing.reminders, incoming.reminders),
+    pushSubscriptions: existing.pushSubscriptions || [],
+    notifiedPushKeys: existing.notifiedPushKeys || []
   };
+}
+
+function activeDueReminders(reminders = []) {
+  const now = new Date();
+  return reminders.filter(reminder => !reminder.completedAt && reminder.dueAt && new Date(reminder.dueAt) <= now);
+}
+
+async function sendPushToSubscriptions(store, title, body, tag) {
+  if (!hasPushBackend || !store.pushSubscriptions?.length) {
+    return 0;
+  }
+
+  const payload = JSON.stringify({ title, body, tag, url: "/" });
+  const keptSubscriptions = [];
+  let sent = 0;
+
+  for (const subscription of store.pushSubscriptions) {
+    try {
+      await webpush.sendNotification(subscription, payload);
+      keptSubscriptions.push(subscription);
+      sent += 1;
+    } catch (error) {
+      if (![404, 410].includes(error.statusCode)) {
+        keptSubscriptions.push(subscription);
+      }
+    }
+  }
+
+  store.pushSubscriptions = keptSubscriptions;
+  return sent;
+}
+
+async function checkDuePushReminders() {
+  if (!hasPushBackend) {
+    return;
+  }
+
+  const store = readStore();
+  const notified = new Set(store.notifiedPushKeys || []);
+  let changed = false;
+
+  for (const reminder of activeDueReminders(store.reminders || [])) {
+    const key = `${reminder.id}:${reminder.dueAt || "no-date"}`;
+    if (notified.has(key)) {
+      continue;
+    }
+
+    const sent = await sendPushToSubscriptions(store, "Woodhouse reminder", reminder.text, key);
+    if (sent > 0) {
+      notified.add(key);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    store.notifiedPushKeys = [...notified].slice(-500);
+  }
+
+  writeStore(store);
 }
 
 function extractResponseText(data) {
@@ -232,7 +329,8 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         aiOnline: hasRealApiKey,
         model: hasRealApiKey ? OPENAI_MODEL : null,
-        syncEnabled: hasSyncKey
+        syncEnabled: hasSyncKey,
+        pushEnabled: hasPushBackend
       });
       return;
     }
@@ -249,6 +347,54 @@ const server = http.createServer(async (req, res) => {
       }
 
       sendJson(res, 200, readStore());
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/api/push/public-key") {
+      sendJson(res, 200, {
+        enabled: hasPushBackend,
+        publicKey: hasPushBackend ? VAPID_PUBLIC_KEY : null
+      });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/push/subscribe") {
+      if (!isSyncAuthorized(req)) {
+        sendJson(res, 401, { error: "Woodhouse sync key is required for push subscriptions." });
+        return;
+      }
+
+      if (!hasPushBackend) {
+        sendJson(res, 503, { error: "Push notifications are not configured on this server." });
+        return;
+      }
+
+      const body = await readRequestBody(req);
+      const subscription = normalizePushSubscription(JSON.parse(body || "{}"));
+      if (!subscription) {
+        sendJson(res, 400, { error: "Invalid push subscription." });
+        return;
+      }
+
+      const store = readStore();
+      const subscriptions = new Map((store.pushSubscriptions || []).map(item => [item.endpoint, item]));
+      subscriptions.set(subscription.endpoint, subscription);
+      store.pushSubscriptions = [...subscriptions.values()].slice(-10);
+      writeStore(store);
+      sendJson(res, 200, { ok: true, subscriptions: store.pushSubscriptions.length });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/push/test") {
+      if (!isSyncAuthorized(req)) {
+        sendJson(res, 401, { error: "Woodhouse sync key is required for push tests." });
+        return;
+      }
+
+      const store = readStore();
+      const sent = await sendPushToSubscriptions(store, "Woodhouse background test", "Background push is working.", "woodhouse-test");
+      writeStore(store);
+      sendJson(res, 200, { sent });
       return;
     }
 
@@ -297,4 +443,11 @@ server.listen(PORT, () => {
   console.log(`Woodhouse JARVIS is online at http://localhost:${PORT}`);
   console.log(hasRealApiKey ? `AI backend: ${OPENAI_MODEL}` : "AI backend: local fallback mode");
   console.log(hasSyncKey ? "Sync backend: enabled" : "Sync backend: disabled");
+  console.log(hasPushBackend ? "Push backend: enabled" : "Push backend: disabled");
 });
+
+setInterval(() => {
+  checkDuePushReminders().catch(error => {
+    console.error("Push reminder check failed:", error.message);
+  });
+}, 60_000);
