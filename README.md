@@ -19,6 +19,20 @@ The hosted GitHub Pages version runs the browser-only assistant UI. The optional
 OpenAI backend in `server.js` is for local/server hosting and does not run on
 GitHub Pages.
 
+## Run smart mode on a phone
+
+Deploy the Node app as a web service so the API key stays on the server.
+This repo includes a Render blueprint at `render.yaml`.
+
+On Render:
+
+1. Create a new Blueprint from this GitHub repo.
+2. Set the `OPENAI_API_KEY` environment variable when Render asks for it.
+3. Deploy the service.
+
+Render will provide a public URL like `https://woodhouse.onrender.com`.
+Open that URL on your phone for smart mode.
+
 ## Optional AI backend
 
 For smart mode, run Woodhouse locally with an OpenAI API key. Keep this key off
