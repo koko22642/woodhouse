@@ -31,7 +31,8 @@ On Render:
 3. Set `WOODHOUSE_SYNC_KEY` to a private phrase you will enter on each device.
 4. Set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` for background push.
 5. Optionally set `WOODHOUSE_TIMEZONE` and `WOODHOUSE_BRIEFING_TIMES`.
-6. Deploy the service.
+6. Set `DATABASE_URL` from Supabase for durable storage.
+7. Deploy the service.
 
 Render will provide a public URL like `https://woodhouse.onrender.com`.
 Open that URL on your phone for smart mode.
@@ -51,6 +52,19 @@ an email-style value like `mailto:you@example.com`.
 Scheduled briefings default to `07:00,20:00` in `America/Chicago`. Change
 `WOODHOUSE_BRIEFING_TIMES` to a comma-separated 24-hour list, such as
 `06:30,21:00`.
+
+## Supabase storage
+
+Create a Supabase project, then copy its Postgres connection string into Render
+as `DATABASE_URL`. Woodhouse creates its own `woodhouse_store` table on startup
+and stores memory, notes, reminders, push subscriptions, and briefing history in
+one JSON document.
+
+In Supabase, use the pooled or direct Postgres URI. If Supabase shows placeholders
+like `[YOUR-PASSWORD]`, replace them before saving the value in Render.
+
+If `DATABASE_URL` is missing or unreachable, Woodhouse falls back to local file
+storage so the app can still boot.
 
 ## Optional AI backend
 

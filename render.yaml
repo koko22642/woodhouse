@@ -23,3 +23,5 @@ services:
         value: America/Chicago
       - key: WOODHOUSE_BRIEFING_TIMES
         value: 07:00,20:00
+      - key: DATABASE_URL
+        sync: false

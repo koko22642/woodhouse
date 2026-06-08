@@ -21,6 +21,7 @@ const syncNowButton = document.querySelector("#syncNowButton");
 const notificationStatus = document.querySelector("#notificationStatus");
 const pushStatus = document.querySelector("#pushStatus");
 const briefingStatus = document.querySelector("#briefingStatus");
+const databaseStatus = document.querySelector("#databaseStatus");
 const enableNotificationsButton = document.querySelector("#enableNotificationsButton");
 const testNotificationsButton = document.querySelector("#testNotificationsButton");
 const micButton = document.querySelector("#micButton");
@@ -83,6 +84,10 @@ function setPushStatus(text) {
 
 function setBriefingStatus(text) {
   briefingStatus.textContent = text;
+}
+
+function setDatabaseStatus(text) {
+  databaseStatus.textContent = text;
 }
 
 function addMessage(role, content) {
@@ -956,11 +961,13 @@ async function boot() {
     setSyncStatus(syncAvailable ? (syncKey ? "On" : "Needs key") : "Off");
     setPushStatus(pushAvailable ? "Ready" : "Unavailable");
     setBriefingStatus(briefingTimes.length ? briefingTimes.join(", ") : "Off");
+    setDatabaseStatus(data.databaseEnabled ? (data.databaseReady ? "Supabase" : "Starting") : "File");
   } catch {
     aiStatus.textContent = "Local";
     setSyncStatus("Off");
     setPushStatus("Unavailable");
     setBriefingStatus("Off");
+    setDatabaseStatus("File");
   }
 
   statusEl.classList.add("online");

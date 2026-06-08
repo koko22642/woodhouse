@@ -2,6 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 let webpush = null;
+let pg = null;
 
 try {
   webpush = require("web-push");
@@ -9,10 +10,17 @@ try {
   webpush = null;
 }
 
+try {
+  pg = require("pg");
+} catch {
+  pg = null;
+}
+
 const PORT = Number(process.env.PORT || 4173);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = process.env.WOODHOUSE_DATA_DIR || path.join(__dirname, "data");
 const STORE_PATH = path.join(DATA_DIR, "woodhouse-store.json");
+const DATABASE_URL = process.env.DATABASE_URL;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 const WOODHOUSE_SYNC_KEY = process.env.WOODHOUSE_SYNC_KEY;
@@ -41,7 +49,10 @@ const hasPushBackend = Boolean(
     VAPID_PUBLIC_KEY !== "replace_me" &&
     VAPID_PRIVATE_KEY !== "replace_me"
 );
+const hasDatabase = Boolean(pg && DATABASE_URL && DATABASE_URL !== "replace_me");
 let pushBackendReady = false;
+let dbPool = null;
+let databaseReady = false;
 
 if (hasPushBackend) {
   try {
@@ -50,6 +61,13 @@ if (hasPushBackend) {
   } catch (error) {
     console.error(`Push backend disabled: ${error.message}`);
   }
+}
+
+if (hasDatabase) {
+  dbPool = new pg.Pool({
+    connectionString: DATABASE_URL,
+    ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
+  });
 }
 const SYSTEM_PROMPT = [
   "You are Woodhouse, Jorge's JARVIS-style local assistant.",
@@ -111,6 +129,69 @@ function readStore() {
 function writeStore(store) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2));
+}
+
+async function initDatabase() {
+  if (!dbPool || databaseReady) {
+    return databaseReady;
+  }
+
+  await dbPool.query(`
+    create table if not exists woodhouse_store (
+      id text primary key,
+      data jsonb not null,
+      updated_at timestamptz not null default now()
+    )
+  `);
+
+  const existing = await dbPool.query("select data from woodhouse_store where id = $1", ["default"]);
+  if (!existing.rowCount) {
+    await dbPool.query(
+      "insert into woodhouse_store (id, data) values ($1, $2::jsonb) on conflict (id) do nothing",
+      ["default", JSON.stringify(readStore())]
+    );
+  }
+
+  databaseReady = true;
+  return true;
+}
+
+async function readStoreAsync() {
+  if (!dbPool) {
+    return readStore();
+  }
+
+  try {
+    await initDatabase();
+    const result = await dbPool.query("select data from woodhouse_store where id = $1", ["default"]);
+    return result.rows[0]?.data || readStore();
+  } catch (error) {
+    console.error(`Database read failed; using file store: ${error.message}`);
+    return readStore();
+  }
+}
+
+async function writeStoreAsync(store) {
+  if (!dbPool) {
+    writeStore(store);
+    return;
+  }
+
+  try {
+    await initDatabase();
+    await dbPool.query(
+      `
+        insert into woodhouse_store (id, data, updated_at)
+        values ($1, $2::jsonb, now())
+        on conflict (id)
+        do update set data = excluded.data, updated_at = now()
+      `,
+      ["default", JSON.stringify(store)]
+    );
+  } catch (error) {
+    console.error(`Database write failed; using file store: ${error.message}`);
+    writeStore(store);
+  }
 }
 
 function isSyncAuthorized(req) {
@@ -312,7 +393,7 @@ async function checkDuePushReminders() {
     return;
   }
 
-  const store = readStore();
+  const store = await readStoreAsync();
   const notified = new Set(store.notifiedPushKeys || []);
   let changed = false;
 
@@ -333,7 +414,7 @@ async function checkDuePushReminders() {
     store.notifiedPushKeys = [...notified].slice(-500);
   }
 
-  writeStore(store);
+  await writeStoreAsync(store);
 }
 
 async function checkScheduledBriefings() {
@@ -347,7 +428,7 @@ async function checkScheduledBriefings() {
     return;
   }
 
-  const store = readStore();
+  const store = await readStoreAsync();
   const briefingKeys = new Set(store.notifiedBriefingKeys || []);
   const key = `${zonedDateKey(now)}:${currentTime}`;
   if (briefingKeys.has(key)) {
@@ -359,7 +440,7 @@ async function checkScheduledBriefings() {
   if (sent > 0) {
     briefingKeys.add(key);
     store.notifiedBriefingKeys = [...briefingKeys].slice(-120);
-    writeStore(store);
+    await writeStoreAsync(store);
   }
 }
 
@@ -462,6 +543,8 @@ const server = http.createServer(async (req, res) => {
         model: hasRealApiKey ? OPENAI_MODEL : null,
         syncEnabled: hasSyncKey,
         pushEnabled: pushBackendReady,
+        databaseEnabled: Boolean(dbPool),
+        databaseReady,
         briefingTimes: WOODHOUSE_BRIEFING_TIMES,
         timezone: WOODHOUSE_TIMEZONE
       });
@@ -479,7 +562,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      sendJson(res, 200, readStore());
+      sendJson(res, 200, await readStoreAsync());
       return;
     }
 
@@ -509,11 +592,11 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const store = readStore();
+      const store = await readStoreAsync();
       const subscriptions = new Map((store.pushSubscriptions || []).map(item => [item.endpoint, item]));
       subscriptions.set(subscription.endpoint, subscription);
       store.pushSubscriptions = [...subscriptions.values()].slice(-10);
-      writeStore(store);
+      await writeStoreAsync(store);
       sendJson(res, 200, { ok: true, subscriptions: store.pushSubscriptions.length });
       return;
     }
@@ -524,9 +607,9 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const store = readStore();
+      const store = await readStoreAsync();
       const sent = await sendPushToSubscriptions(store, "Woodhouse background test", "Background push is working.", "woodhouse-test");
-      writeStore(store);
+      await writeStoreAsync(store);
       sendJson(res, 200, { sent });
       return;
     }
@@ -539,8 +622,8 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readRequestBody(req);
       const incoming = JSON.parse(body || "{}");
-      const store = mergeStore(readStore(), incoming);
-      writeStore(store);
+      const store = mergeStore(await readStoreAsync(), incoming);
+      await writeStoreAsync(store);
       sendJson(res, 200, store);
       return;
     }
@@ -577,7 +660,12 @@ server.listen(PORT, () => {
   console.log(hasRealApiKey ? `AI backend: ${OPENAI_MODEL}` : "AI backend: local fallback mode");
   console.log(hasSyncKey ? "Sync backend: enabled" : "Sync backend: disabled");
   console.log(pushBackendReady ? "Push backend: enabled" : "Push backend: disabled");
+  console.log(dbPool ? "Database: configured" : "Database: file store fallback");
   console.log(`Briefings: ${WOODHOUSE_BRIEFING_TIMES.join(", ")} ${WOODHOUSE_TIMEZONE}`);
+
+  initDatabase().catch(error => {
+    console.error(`Database init failed; using file store fallback: ${error.message}`);
+  });
 });
 
 setInterval(() => {

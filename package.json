@@ -9,6 +9,7 @@
     "vapid": "node scripts/generate-vapid-keys.js"
   },
   "dependencies": {
+    "pg": "^8.12.0",
     "web-push": "^3.6.7"
   },
   "engines": {
