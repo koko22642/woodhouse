@@ -16,6 +16,7 @@ const syncKeyInput = document.querySelector("#syncKeyInput");
 const syncNowButton = document.querySelector("#syncNowButton");
 const notificationStatus = document.querySelector("#notificationStatus");
 const pushStatus = document.querySelector("#pushStatus");
+const briefingStatus = document.querySelector("#briefingStatus");
 const enableNotificationsButton = document.querySelector("#enableNotificationsButton");
 const testNotificationsButton = document.querySelector("#testNotificationsButton");
 const micButton = document.querySelector("#micButton");
@@ -35,6 +36,8 @@ let aiOnline = false;
 let syncAvailable = false;
 let pushAvailable = false;
 let pushPublicKey = null;
+let briefingTimes = [];
+let briefingTimezone = "";
 let syncKey = localStorage.getItem(syncKeyStorageKey) || "";
 let serviceWorkerRegistration = null;
 let notifiedReminders = loadJson(notifiedRemindersKey, []);
@@ -72,6 +75,10 @@ function setNotificationStatus(text) {
 
 function setPushStatus(text) {
   pushStatus.textContent = text;
+}
+
+function setBriefingStatus(text) {
+  briefingStatus.textContent = text;
 }
 
 function addMessage(role, content) {
@@ -843,13 +850,17 @@ async function boot() {
     aiOnline = data.aiOnline;
     syncAvailable = Boolean(data.syncEnabled);
     pushAvailable = Boolean(data.pushEnabled);
+    briefingTimes = data.briefingTimes || [];
+    briefingTimezone = data.timezone || "";
     aiStatus.textContent = aiOnline ? data.model : "Local";
     setSyncStatus(syncAvailable ? (syncKey ? "On" : "Needs key") : "Off");
     setPushStatus(pushAvailable ? "Ready" : "Unavailable");
+    setBriefingStatus(briefingTimes.length ? briefingTimes.join(", ") : "Off");
   } catch {
     aiStatus.textContent = "Local";
     setSyncStatus("Off");
     setPushStatus("Unavailable");
+    setBriefingStatus("Off");
   }
 
   statusEl.classList.add("online");

@@ -19,6 +19,11 @@ const WOODHOUSE_SYNC_KEY = process.env.WOODHOUSE_SYNC_KEY;
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:you@example.com";
+const WOODHOUSE_TIMEZONE = process.env.WOODHOUSE_TIMEZONE || "America/Chicago";
+const WOODHOUSE_BRIEFING_TIMES = (process.env.WOODHOUSE_BRIEFING_TIMES || "07:00,20:00")
+  .split(",")
+  .map(time => time.trim())
+  .filter(Boolean);
 const hasRealApiKey = Boolean(
   OPENAI_API_KEY &&
     OPENAI_API_KEY !== "your_api_key_here" &&
@@ -92,7 +97,14 @@ function readStore() {
   try {
     return JSON.parse(fs.readFileSync(STORE_PATH, "utf8"));
   } catch {
-    return { memory: [], notes: [], reminders: [], pushSubscriptions: [], notifiedPushKeys: [] };
+    return {
+      memory: [],
+      notes: [],
+      reminders: [],
+      pushSubscriptions: [],
+      notifiedPushKeys: [],
+      notifiedBriefingKeys: []
+    };
   }
 }
 
@@ -175,13 +187,96 @@ function mergeStore(existing, incoming) {
     notes: mergeEntries(existing.notes, incoming.notes),
     reminders: mergeEntries(existing.reminders, incoming.reminders),
     pushSubscriptions: existing.pushSubscriptions || [],
-    notifiedPushKeys: existing.notifiedPushKeys || []
+    notifiedPushKeys: existing.notifiedPushKeys || [],
+    notifiedBriefingKeys: existing.notifiedBriefingKeys || []
   };
 }
 
 function activeDueReminders(reminders = []) {
   const now = new Date();
   return reminders.filter(reminder => !reminder.completedAt && reminder.dueAt && new Date(reminder.dueAt) <= now);
+}
+
+function activeReminders(reminders = []) {
+  return reminders.filter(reminder => !reminder.completedAt);
+}
+
+function formatReminder(reminder, timezone = WOODHOUSE_TIMEZONE) {
+  if (!reminder.dueAt) {
+    return reminder.text;
+  }
+
+  const due = new Date(reminder.dueAt);
+  const dateText = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(due);
+  const repeatText = reminder.repeat === "weekly" ? ", weekly" : "";
+  return `${reminder.text} - ${dateText}${repeatText}`;
+}
+
+function zonedParts(date = new Date(), timezone = WOODHOUSE_TIMEZONE) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  return Object.fromEntries(parts.map(part => [part.type, part.value]));
+}
+
+function zonedDateKey(date = new Date(), timezone = WOODHOUSE_TIMEZONE) {
+  const parts = zonedParts(date, timezone);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function zonedMinuteKey(date = new Date(), timezone = WOODHOUSE_TIMEZONE) {
+  const parts = zonedParts(date, timezone);
+  return `${parts.hour}:${parts.minute}`;
+}
+
+function remindersDueToday(reminders = [], timezone = WOODHOUSE_TIMEZONE) {
+  const today = zonedDateKey(new Date(), timezone);
+  return activeReminders(reminders).filter(reminder => {
+    if (!reminder.dueAt) {
+      return false;
+    }
+    return zonedDateKey(new Date(reminder.dueAt), timezone) === today;
+  });
+}
+
+function overdueReminders(reminders = []) {
+  const now = new Date();
+  return activeReminders(reminders).filter(reminder => reminder.dueAt && new Date(reminder.dueAt) < now);
+}
+
+function buildBriefingBody(store) {
+  const notes = store.notes || [];
+  const active = activeReminders(store.reminders || []);
+  const dueToday = remindersDueToday(store.reminders || []);
+  const overdue = overdueReminders(store.reminders || []);
+  const lines = [
+    `${notes.length} note${notes.length === 1 ? "" : "s"}. ${active.length} active reminder${active.length === 1 ? "" : "s"}.`
+  ];
+
+  if (overdue.length) {
+    lines.push(`Overdue: ${overdue.slice(0, 3).map(reminder => reminder.text).join("; ")}.`);
+  }
+
+  if (dueToday.length) {
+    lines.push(`Today: ${dueToday.slice(0, 3).map(reminder => formatReminder(reminder)).join("; ")}.`);
+  } else {
+    lines.push("Nothing due today.");
+  }
+
+  return lines.join(" ");
 }
 
 async function sendPushToSubscriptions(store, title, body, tag) {
@@ -236,6 +331,33 @@ async function checkDuePushReminders() {
   }
 
   writeStore(store);
+}
+
+async function checkScheduledBriefings() {
+  if (!pushBackendReady || !WOODHOUSE_BRIEFING_TIMES.length) {
+    return;
+  }
+
+  const now = new Date();
+  const currentTime = zonedMinuteKey(now);
+  if (!WOODHOUSE_BRIEFING_TIMES.includes(currentTime)) {
+    return;
+  }
+
+  const store = readStore();
+  const briefingKeys = new Set(store.notifiedBriefingKeys || []);
+  const key = `${zonedDateKey(now)}:${currentTime}`;
+  if (briefingKeys.has(key)) {
+    return;
+  }
+
+  const title = currentTime < "12:00" ? "Woodhouse morning brief" : "Woodhouse evening brief";
+  const sent = await sendPushToSubscriptions(store, title, buildBriefingBody(store), `briefing:${key}`);
+  if (sent > 0) {
+    briefingKeys.add(key);
+    store.notifiedBriefingKeys = [...briefingKeys].slice(-120);
+    writeStore(store);
+  }
 }
 
 function extractResponseText(data) {
@@ -336,7 +458,9 @@ const server = http.createServer(async (req, res) => {
         aiOnline: hasRealApiKey,
         model: hasRealApiKey ? OPENAI_MODEL : null,
         syncEnabled: hasSyncKey,
-        pushEnabled: pushBackendReady
+        pushEnabled: pushBackendReady,
+        briefingTimes: WOODHOUSE_BRIEFING_TIMES,
+        timezone: WOODHOUSE_TIMEZONE
       });
       return;
     }
@@ -450,10 +574,14 @@ server.listen(PORT, () => {
   console.log(hasRealApiKey ? `AI backend: ${OPENAI_MODEL}` : "AI backend: local fallback mode");
   console.log(hasSyncKey ? "Sync backend: enabled" : "Sync backend: disabled");
   console.log(pushBackendReady ? "Push backend: enabled" : "Push backend: disabled");
+  console.log(`Briefings: ${WOODHOUSE_BRIEFING_TIMES.join(", ")} ${WOODHOUSE_TIMEZONE}`);
 });
 
 setInterval(() => {
   checkDuePushReminders().catch(error => {
     console.error("Push reminder check failed:", error.message);
+  });
+  checkScheduledBriefings().catch(error => {
+    console.error("Briefing check failed:", error.message);
   });
 }, 60_000);

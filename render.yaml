@@ -19,3 +19,7 @@ services:
         sync: false
       - key: VAPID_SUBJECT
         value: mailto:you@example.com
+      - key: WOODHOUSE_TIMEZONE
+        value: America/Chicago
+      - key: WOODHOUSE_BRIEFING_TIMES
+        value: 07:00,20:00

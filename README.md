@@ -30,7 +30,8 @@ On Render:
 2. Set the `OPENAI_API_KEY` environment variable when Render asks for it.
 3. Set `WOODHOUSE_SYNC_KEY` to a private phrase you will enter on each device.
 4. Set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` for background push.
-5. Deploy the service.
+5. Optionally set `WOODHOUSE_TIMEZONE` and `WOODHOUSE_BRIEFING_TIMES`.
+6. Deploy the service.
 
 Render will provide a public URL like `https://woodhouse.onrender.com`.
 Open that URL on your phone for smart mode.
@@ -46,6 +47,10 @@ node scripts/generate-vapid-keys.js
 
 Use the generated `publicKey` and `privateKey` in Render. `VAPID_SUBJECT` can be
 an email-style value like `mailto:you@example.com`.
+
+Scheduled briefings default to `07:00,20:00` in `America/Chicago`. Change
+`WOODHOUSE_BRIEFING_TIMES` to a comma-separated 24-hour list, such as
+`06:30,21:00`.
 
 ## Optional AI backend
 
