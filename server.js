@@ -36,9 +36,15 @@ const hasPushBackend = Boolean(
     VAPID_PUBLIC_KEY !== "replace_me" &&
     VAPID_PRIVATE_KEY !== "replace_me"
 );
+let pushBackendReady = false;
 
 if (hasPushBackend) {
-  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    pushBackendReady = true;
+  } catch (error) {
+    console.error(`Push backend disabled: ${error.message}`);
+  }
 }
 const SYSTEM_PROMPT = [
   "You are Woodhouse, Jorge's JARVIS-style local assistant.",
@@ -179,7 +185,7 @@ function activeDueReminders(reminders = []) {
 }
 
 async function sendPushToSubscriptions(store, title, body, tag) {
-  if (!hasPushBackend || !store.pushSubscriptions?.length) {
+  if (!pushBackendReady || !store.pushSubscriptions?.length) {
     return 0;
   }
 
@@ -204,7 +210,7 @@ async function sendPushToSubscriptions(store, title, body, tag) {
 }
 
 async function checkDuePushReminders() {
-  if (!hasPushBackend) {
+  if (!pushBackendReady) {
     return;
   }
 
@@ -330,7 +336,7 @@ const server = http.createServer(async (req, res) => {
         aiOnline: hasRealApiKey,
         model: hasRealApiKey ? OPENAI_MODEL : null,
         syncEnabled: hasSyncKey,
-        pushEnabled: hasPushBackend
+        pushEnabled: pushBackendReady
       });
       return;
     }
@@ -352,8 +358,8 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && req.url === "/api/push/public-key") {
       sendJson(res, 200, {
-        enabled: hasPushBackend,
-        publicKey: hasPushBackend ? VAPID_PUBLIC_KEY : null
+        enabled: pushBackendReady,
+        publicKey: pushBackendReady ? VAPID_PUBLIC_KEY : null
       });
       return;
     }
@@ -364,7 +370,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      if (!hasPushBackend) {
+      if (!pushBackendReady) {
         sendJson(res, 503, { error: "Push notifications are not configured on this server." });
         return;
       }
@@ -443,7 +449,7 @@ server.listen(PORT, () => {
   console.log(`Woodhouse JARVIS is online at http://localhost:${PORT}`);
   console.log(hasRealApiKey ? `AI backend: ${OPENAI_MODEL}` : "AI backend: local fallback mode");
   console.log(hasSyncKey ? "Sync backend: enabled" : "Sync backend: disabled");
-  console.log(hasPushBackend ? "Push backend: enabled" : "Push backend: disabled");
+  console.log(pushBackendReady ? "Push backend: enabled" : "Push backend: disabled");
 });
 
 setInterval(() => {
