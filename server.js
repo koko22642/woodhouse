@@ -53,6 +53,7 @@ const hasDatabase = Boolean(pg && DATABASE_URL && DATABASE_URL !== "replace_me")
 let pushBackendReady = false;
 let dbPool = null;
 let databaseReady = false;
+let databaseError = null;
 
 if (hasPushBackend) {
   try {
@@ -66,7 +67,8 @@ if (hasPushBackend) {
 if (hasDatabase) {
   dbPool = new pg.Pool({
     connectionString: DATABASE_URL,
-    ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
+    ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10_000
   });
 }
 const SYSTEM_PROMPT = [
@@ -131,6 +133,13 @@ function writeStore(store) {
   fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2));
 }
 
+function captureDatabaseError(error) {
+  databaseReady = false;
+  databaseError = error.message
+    .replace(/postgresql:\/\/[^@]+@/g, "postgresql://[hidden]@")
+    .replace(/postgres:\/\/[^@]+@/g, "postgres://[hidden]@");
+}
+
 async function initDatabase() {
   if (!dbPool || databaseReady) {
     return databaseReady;
@@ -153,6 +162,7 @@ async function initDatabase() {
   }
 
   databaseReady = true;
+  databaseError = null;
   return true;
 }
 
@@ -166,6 +176,7 @@ async function readStoreAsync() {
     const result = await dbPool.query("select data from woodhouse_store where id = $1", ["default"]);
     return result.rows[0]?.data || readStore();
   } catch (error) {
+    captureDatabaseError(error);
     console.error(`Database read failed; using file store: ${error.message}`);
     return readStore();
   }
@@ -189,6 +200,7 @@ async function writeStoreAsync(store) {
       ["default", JSON.stringify(store)]
     );
   } catch (error) {
+    captureDatabaseError(error);
     console.error(`Database write failed; using file store: ${error.message}`);
     writeStore(store);
   }
@@ -545,6 +557,7 @@ const server = http.createServer(async (req, res) => {
         pushEnabled: pushBackendReady,
         databaseEnabled: Boolean(dbPool),
         databaseReady,
+        databaseError,
         briefingTimes: WOODHOUSE_BRIEFING_TIMES,
         timezone: WOODHOUSE_TIMEZONE
       });
@@ -664,6 +677,7 @@ server.listen(PORT, () => {
   console.log(`Briefings: ${WOODHOUSE_BRIEFING_TIMES.join(", ")} ${WOODHOUSE_TIMEZONE}`);
 
   initDatabase().catch(error => {
+    captureDatabaseError(error);
     console.error(`Database init failed; using file store fallback: ${error.message}`);
   });
 });

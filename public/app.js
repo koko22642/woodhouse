@@ -90,6 +90,36 @@ function setDatabaseStatus(text) {
   databaseStatus.textContent = text;
 }
 
+function applyServerStatus(data) {
+  aiOnline = data.aiOnline;
+  syncAvailable = Boolean(data.syncEnabled);
+  pushAvailable = Boolean(data.pushEnabled);
+  briefingTimes = data.briefingTimes || [];
+  briefingTimezone = data.timezone || "";
+  aiStatus.textContent = aiOnline ? data.model : "Local";
+  setSyncStatus(syncAvailable ? (syncKey ? "On" : "Needs key") : "Off");
+  setPushStatus(pushAvailable ? "Ready" : "Unavailable");
+  setBriefingStatus(briefingTimes.length ? briefingTimes.join(", ") : "Off");
+
+  if (!data.databaseEnabled) {
+    setDatabaseStatus("File");
+  } else if (data.databaseReady) {
+    setDatabaseStatus("Supabase");
+  } else if (data.databaseError) {
+    setDatabaseStatus("Error");
+    databaseStatus.title = data.databaseError;
+  } else {
+    setDatabaseStatus("Starting");
+  }
+}
+
+async function refreshServerStatus() {
+  const response = await fetch("/api/status");
+  const data = await response.json();
+  applyServerStatus(data);
+  return data;
+}
+
 function addMessage(role, content) {
   messages.push({ role, content });
   const message = document.createElement("article");
@@ -819,7 +849,7 @@ function runTool(command) {
 
   if (lower.includes("status")) {
     const mode = aiOnline ? "AI backend connected" : "local fallback mode";
-    return `Systems nominal. Voice output is ready, voice input is ${SpeechRecognition ? "available" : "not available in this browser"}, and I am running in ${mode}.`;
+    return `Systems nominal. Voice output is ready, voice input is ${SpeechRecognition ? "available" : "not available in this browser"}, database is ${databaseStatus.textContent}, and I am running in ${mode}.`;
   }
 
   if (lower.includes("what can you do") || lower.includes("abilities")) {
@@ -950,18 +980,7 @@ async function boot() {
   }
 
   try {
-    const response = await fetch("/api/status");
-    const data = await response.json();
-    aiOnline = data.aiOnline;
-    syncAvailable = Boolean(data.syncEnabled);
-    pushAvailable = Boolean(data.pushEnabled);
-    briefingTimes = data.briefingTimes || [];
-    briefingTimezone = data.timezone || "";
-    aiStatus.textContent = aiOnline ? data.model : "Local";
-    setSyncStatus(syncAvailable ? (syncKey ? "On" : "Needs key") : "Off");
-    setPushStatus(pushAvailable ? "Ready" : "Unavailable");
-    setBriefingStatus(briefingTimes.length ? briefingTimes.join(", ") : "Off");
-    setDatabaseStatus(data.databaseEnabled ? (data.databaseReady ? "Supabase" : "Starting") : "File");
+    await refreshServerStatus();
   } catch {
     aiStatus.textContent = "Local";
     setSyncStatus("Off");
@@ -985,6 +1004,11 @@ async function boot() {
   loadPushConfig();
   checkDueNotifications();
   window.setInterval(checkDueNotifications, 60_000);
+  window.setInterval(() => {
+    refreshServerStatus().catch(() => {
+      setDatabaseStatus("File");
+    });
+  }, 15_000);
 }
 
 composer.addEventListener("submit", event => {
