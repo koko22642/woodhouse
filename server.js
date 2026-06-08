@@ -96,7 +96,10 @@ function normalizeEntry(entry) {
   return {
     id: cleanText(entry.id) || text.toLowerCase(),
     text,
-    createdAt: cleanText(entry.createdAt) || new Date().toISOString()
+    createdAt: cleanText(entry.createdAt) || new Date().toISOString(),
+    dueAt: cleanText(entry.dueAt) || null,
+    repeat: cleanText(entry.repeat) || null,
+    completedAt: cleanText(entry.completedAt) || null
   };
 }
 

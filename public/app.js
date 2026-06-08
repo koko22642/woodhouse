@@ -93,14 +93,14 @@ function renderToolList(list, items, emptyText) {
 
   items.slice(0, 6).forEach(entry => {
     const item = document.createElement("li");
-    item.textContent = entry.text;
+    item.textContent = formatEntry(entry);
     list.appendChild(item);
   });
 }
 
 function renderTools() {
   renderToolList(notesList, notes, "No notes yet.");
-  renderToolList(remindersList, reminders, "No reminders yet.");
+  renderToolList(remindersList, activeReminders(), "No reminders yet.");
 }
 
 function createEntry(text) {
@@ -109,6 +109,152 @@ function createEntry(text) {
     text,
     createdAt: new Date().toISOString()
   };
+}
+
+function createReminder(text, schedule) {
+  return {
+    ...createEntry(text),
+    dueAt: schedule.dueAt,
+    repeat: schedule.repeat || null,
+    completedAt: null
+  };
+}
+
+function formatEntry(entry) {
+  if (!entry.dueAt) {
+    return entry.text;
+  }
+
+  const due = new Date(entry.dueAt);
+  const dateText = due.toLocaleString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+  const repeatText = entry.repeat === "weekly" ? ", weekly" : "";
+  const doneText = entry.completedAt ? " [done]" : "";
+  return `${entry.text} - ${dateText}${repeatText}${doneText}`;
+}
+
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function endOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+}
+
+function applyTime(date, timeText) {
+  if (!timeText) {
+    date.setHours(9, 0, 0, 0);
+    return date;
+  }
+
+  const match = timeText.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (!match) {
+    return date;
+  }
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2] || 0);
+  const meridiem = match[3]?.toLowerCase();
+
+  if (meridiem === "pm" && hours < 12) {
+    hours += 12;
+  }
+  if (meridiem === "am" && hours === 12) {
+    hours = 0;
+  }
+
+  date.setHours(hours, minutes, 0, 0);
+  return date;
+}
+
+function parseTimePhrase(text) {
+  const match = text.match(/\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i);
+  return match?.[1] || "";
+}
+
+function nextWeekday(targetDay, repeat = false) {
+  const now = new Date();
+  const date = startOfDay(now);
+  const delta = (targetDay - date.getDay() + 7) % 7;
+  date.setDate(date.getDate() + (delta === 0 && (repeat || date <= now) ? 7 : delta));
+  return date;
+}
+
+function parseReminderSchedule(text) {
+  const lower = text.toLowerCase();
+  const timeText = parseTimePhrase(text);
+  const weekdays = {
+    sunday: 0,
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6
+  };
+
+  let due = null;
+  let repeat = null;
+
+  const everyMatch = lower.match(/\bevery\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/);
+  if (everyMatch) {
+    repeat = "weekly";
+    due = nextWeekday(weekdays[everyMatch[1]], true);
+  } else if (lower.includes("tomorrow")) {
+    due = startOfDay(new Date());
+    due.setDate(due.getDate() + 1);
+  } else if (lower.includes("today")) {
+    due = startOfDay(new Date());
+  } else {
+    const weekdayMatch = lower.match(/\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/);
+    if (weekdayMatch) {
+      due = nextWeekday(weekdays[weekdayMatch[1]]);
+    }
+  }
+
+  if (!due) {
+    return { dueAt: null, repeat: null };
+  }
+
+  return {
+    dueAt: applyTime(due, timeText).toISOString(),
+    repeat
+  };
+}
+
+function cleanReminderText(text) {
+  return text
+    .replace(/\bevery\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi, "")
+    .replace(/\b(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi, "")
+    .replace(/\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function activeReminders() {
+  return reminders.filter(reminder => !reminder.completedAt);
+}
+
+function dueRemindersFor(date = new Date()) {
+  const start = startOfDay(date);
+  const end = endOfDay(date);
+  return activeReminders().filter(reminder => {
+    if (!reminder.dueAt) {
+      return false;
+    }
+    const due = new Date(reminder.dueAt);
+    return due >= start && due <= end;
+  });
+}
+
+function overdueReminders() {
+  const now = new Date();
+  return activeReminders().filter(reminder => reminder.dueAt && new Date(reminder.dueAt) < now);
 }
 
 function mergeEntries(existing = [], incoming = []) {
@@ -121,7 +267,10 @@ function mergeEntries(existing = [], incoming = []) {
     merged.set(id, {
       id,
       text: entry.text,
-      createdAt: entry.createdAt || new Date().toISOString()
+      createdAt: entry.createdAt || new Date().toISOString(),
+      dueAt: entry.dueAt || null,
+      repeat: entry.repeat || null,
+      completedAt: entry.completedAt || null
     });
   }
   return [...merged.values()]
@@ -215,11 +364,13 @@ function runTool(command) {
 
   if (lower === "daily brief" || lower === "briefing" || lower === "brief") {
     const noteCount = notes.length;
-    const reminderCount = reminders.length;
-    const topReminder = reminders[0]?.text;
+    const activeCount = activeReminders().length;
+    const dueToday = dueRemindersFor();
+    const overdue = overdueReminders();
     return [
-      `You have ${noteCount} note${noteCount === 1 ? "" : "s"} and ${reminderCount} reminder${reminderCount === 1 ? "" : "s"}.`,
-      topReminder ? `Top reminder: ${topReminder}` : "No active reminders.",
+      `You have ${noteCount} note${noteCount === 1 ? "" : "s"} and ${activeCount} active reminder${activeCount === 1 ? "" : "s"}.`,
+      overdue.length ? `Overdue: ${overdue.map(formatEntry).join("; ")}.` : "No overdue reminders.",
+      dueToday.length ? `Due today: ${dueToday.map(formatEntry).join("; ")}.` : "Nothing due today.",
       aiOnline ? "AI backend is online." : "AI backend is in local mode."
     ].join(" ");
   }
@@ -253,10 +404,57 @@ function runTool(command) {
   }
 
   if (lower === "list reminders" || lower === "show reminders") {
-    if (!reminders.length) {
+    const active = activeReminders();
+    if (!active.length) {
       return "You do not have any reminders yet.";
     }
-    return `Reminders: ${reminders.map((reminder, index) => `${index + 1}. ${reminder.text}`).join(" ")}`;
+    return `Reminders: ${active.map((reminder, index) => `${index + 1}. ${formatEntry(reminder)}`).join(" ")}`;
+  }
+
+  if (
+    lower === "due today" ||
+    lower === "today's reminders" ||
+    lower.startsWith("what reminders are due today")
+  ) {
+    const dueToday = dueRemindersFor();
+    if (!dueToday.length) {
+      return "No reminders are due today.";
+    }
+    return `Due today: ${dueToday.map((reminder, index) => `${index + 1}. ${formatEntry(reminder)}`).join(" ")}`;
+  }
+
+  if (lower === "overdue reminders" || lower === "what is overdue") {
+    const overdue = overdueReminders();
+    if (!overdue.length) {
+      return "No reminders are overdue.";
+    }
+    return `Overdue: ${overdue.map((reminder, index) => `${index + 1}. ${formatEntry(reminder)}`).join(" ")}`;
+  }
+
+  const completeMatch = lower.match(/^(?:complete|done|finish)\s+reminder\s+(\d+)$/);
+  if (completeMatch) {
+    const index = Number(completeMatch[1]) - 1;
+    const active = activeReminders();
+    const reminder = active[index];
+    if (!reminder) {
+      return "I could not find that reminder number.";
+    }
+
+    if (reminder.repeat === "weekly" && reminder.dueAt) {
+      const next = new Date(reminder.dueAt);
+      next.setDate(next.getDate() + 7);
+      reminder.dueAt = next.toISOString();
+      renderTools();
+      saveState();
+      scheduleSync();
+      return `Completed and rescheduled: ${formatEntry(reminder)}`;
+    }
+
+    reminder.completedAt = new Date().toISOString();
+    renderTools();
+    saveState();
+    scheduleSync();
+    return `Completed: ${reminder.text}`;
   }
 
   const noteMatch = trimmed.match(/^(?:note|add note|take note)\s+(.+)/i);
@@ -269,14 +467,16 @@ function runTool(command) {
     return `Noted: ${text}`;
   }
 
-  const reminderMatch = trimmed.match(/^(?:remind me to|remind|add reminder)\s+(.+)/i);
+  const reminderMatch = trimmed.match(/^(?:remind me to|remind me|remind|add reminder)\s+(.+)/i);
   if (reminderMatch) {
-    const text = reminderMatch[1].trim();
-    reminders.unshift(createEntry(text));
+    const rawText = reminderMatch[1].trim();
+    const schedule = parseReminderSchedule(rawText);
+    const text = cleanReminderText(rawText) || rawText;
+    reminders.unshift(createReminder(text, schedule));
     renderTools();
     saveState();
     scheduleSync();
-    return `Reminder added: ${text}`;
+    return `Reminder added: ${formatEntry(reminders[0])}`;
   }
 
   if (lower.startsWith("remember ")) {
@@ -332,7 +532,7 @@ async function remoteReply() {
         "Notes:",
         ...notes.slice(0, 10).map(note => `- ${note.text}`),
         "Reminders:",
-        ...reminders.slice(0, 10).map(reminder => `- ${reminder.text}`)
+        ...activeReminders().slice(0, 10).map(reminder => `- ${formatEntry(reminder)}`)
       ].join("\n")
     })
   });
