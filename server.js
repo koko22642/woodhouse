@@ -53,6 +53,26 @@ function readRequestBody(req) {
   });
 }
 
+function extractResponseText(data) {
+  if (typeof data.output_text === "string" && data.output_text.trim()) {
+    return data.output_text;
+  }
+
+  const textParts = [];
+  for (const item of data.output || []) {
+    for (const content of item.content || []) {
+      if ((content.type === "output_text" || content.type === "text") && content.text) {
+        textParts.push(content.text);
+      }
+      if (content.type === "refusal" && content.refusal) {
+        textParts.push(content.refusal);
+      }
+    }
+  }
+
+  return textParts.join("\n").trim();
+}
+
 async function askOpenAI(messages, memory) {
   if (!hasRealApiKey) {
     throw new Error("OPENAI_API_KEY is missing or still set to the placeholder value.");
@@ -89,7 +109,13 @@ async function askOpenAI(messages, memory) {
   }
 
   const data = await response.json();
-  return data.output_text || "I received a response, but it did not include text output.";
+  const text = extractResponseText(data);
+
+  if (!text) {
+    throw new Error(`OpenAI response completed without text output. Response status: ${data.status || "unknown"}`);
+  }
+
+  return text;
 }
 
 function serveStatic(req, res) {
