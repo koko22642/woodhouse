@@ -6,6 +6,11 @@ const PORT = Number(process.env.PORT || 4173);
 const PUBLIC_DIR = path.join(__dirname, "public");
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4-mini";
+const hasRealApiKey = Boolean(
+  OPENAI_API_KEY &&
+    OPENAI_API_KEY !== "your_api_key_here" &&
+    OPENAI_API_KEY !== "replace_me"
+);
 const SYSTEM_PROMPT = [
   "You are Woodhouse, Jorge's JARVIS-style local assistant.",
   "Be concise, capable, calm, and practical. Speak like a useful copilot, not a chatbot demo.",
@@ -49,8 +54,8 @@ function readRequestBody(req) {
 }
 
 async function askOpenAI(messages, memory) {
-  if (!OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is not set.");
+  if (!hasRealApiKey) {
+    throw new Error("OPENAI_API_KEY is missing or still set to the placeholder value.");
   }
 
   const conversation = messages.slice(-16).map(message => ({
@@ -117,15 +122,17 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "GET" && req.url === "/api/status") {
       sendJson(res, 200, {
-        aiOnline: Boolean(OPENAI_API_KEY),
-        model: OPENAI_API_KEY ? OPENAI_MODEL : null
+        aiOnline: hasRealApiKey,
+        model: hasRealApiKey ? OPENAI_MODEL : null
       });
       return;
     }
 
     if (req.method === "POST" && req.url === "/api/chat") {
-      if (!OPENAI_API_KEY) {
-        sendJson(res, 401, { error: "OPENAI_API_KEY is not set on the server." });
+      if (!hasRealApiKey) {
+        sendJson(res, 401, {
+          error: "OPENAI_API_KEY is missing or still set to the placeholder value."
+        });
         return;
       }
 
@@ -150,5 +157,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Woodhouse JARVIS is online at http://localhost:${PORT}`);
-  console.log(OPENAI_API_KEY ? `AI backend: ${OPENAI_MODEL}` : "AI backend: local fallback mode");
+  console.log(hasRealApiKey ? `AI backend: ${OPENAI_MODEL}` : "AI backend: local fallback mode");
 });
