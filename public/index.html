@@ -39,8 +39,10 @@
         <section class="quick-actions" aria-label="Quick actions">
           <button data-command="status report">Status</button>
           <button data-command="what can you do">Abilities</button>
+          <button data-command="daily brief">Brief</button>
+          <button data-command="list notes">Notes</button>
+          <button data-command="list reminders">Reminders</button>
           <button data-command="remember I prefer concise answers">Remember</button>
-          <button data-command="clear memory">Clear Memory</button>
         </section>
 
         <section class="conversation" id="conversation" aria-live="polite"></section>
@@ -77,10 +79,23 @@
         </section>
 
         <section>
+          <h2>Notes</h2>
+          <ul class="memory-list" id="notesList"></ul>
+        </section>
+
+        <section>
+          <h2>Reminders</h2>
+          <ul class="memory-list" id="remindersList"></ul>
+        </section>
+
+        <section>
           <h2>Tools</h2>
           <ul class="tool-list">
             <li>Conversation</li>
             <li>Local memory</li>
+            <li>Notes</li>
+            <li>Reminders</li>
+            <li>Daily brief</li>
             <li>Speech synthesis</li>
             <li>Browser commands</li>
             <li>Optional OpenAI backend</li>

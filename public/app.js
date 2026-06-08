@@ -8,12 +8,16 @@ const aiStatus = document.querySelector("#aiStatus");
 const voiceInputStatus = document.querySelector("#voiceInputStatus");
 const voiceOutputStatus = document.querySelector("#voiceOutputStatus");
 const memoryList = document.querySelector("#memoryList");
+const notesList = document.querySelector("#notesList");
+const remindersList = document.querySelector("#remindersList");
 const micButton = document.querySelector("#micButton");
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const synth = window.speechSynthesis;
 const storageKey = "woodhouse.memory";
 const transcriptKey = "woodhouse.transcript";
+const notesKey = "woodhouse.notes";
+const remindersKey = "woodhouse.reminders";
 
 let recognition = null;
 let isListening = false;
@@ -23,6 +27,8 @@ let memory = loadJson(storageKey, [
   "Call the assistant Woodhouse.",
   "Keep answers useful and concise."
 ]);
+let notes = loadJson(notesKey, []);
+let reminders = loadJson(remindersKey, []);
 
 function loadJson(key, fallback) {
   try {
@@ -35,6 +41,8 @@ function loadJson(key, fallback) {
 function saveState() {
   localStorage.setItem(storageKey, JSON.stringify(memory));
   localStorage.setItem(transcriptKey, JSON.stringify(messages.slice(-50)));
+  localStorage.setItem(notesKey, JSON.stringify(notes.slice(0, 25)));
+  localStorage.setItem(remindersKey, JSON.stringify(reminders.slice(0, 25)));
 }
 
 function addMessage(role, content) {
@@ -63,6 +71,35 @@ function renderMemory() {
   });
 }
 
+function renderToolList(list, items, emptyText) {
+  list.innerHTML = "";
+  if (!items.length) {
+    const item = document.createElement("li");
+    item.textContent = emptyText;
+    list.appendChild(item);
+    return;
+  }
+
+  items.slice(0, 6).forEach(entry => {
+    const item = document.createElement("li");
+    item.textContent = entry.text;
+    list.appendChild(item);
+  });
+}
+
+function renderTools() {
+  renderToolList(notesList, notes, "No notes yet.");
+  renderToolList(remindersList, reminders, "No reminders yet.");
+}
+
+function createEntry(text) {
+  return {
+    id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+    text,
+    createdAt: new Date().toISOString()
+  };
+}
+
 function speak(text) {
   if (!synth) {
     voiceOutputStatus.textContent = "Unavailable";
@@ -77,21 +114,81 @@ function speak(text) {
   synth.speak(utterance);
 }
 
-function localReply(command) {
-  const lower = command.toLowerCase().trim();
+function runTool(command) {
+  const trimmed = command.trim();
+  const lower = trimmed.toLowerCase();
 
-  if (lower.includes("clear memory")) {
+  if (lower === "daily brief" || lower === "briefing" || lower === "brief") {
+    const noteCount = notes.length;
+    const reminderCount = reminders.length;
+    const topReminder = reminders[0]?.text;
+    return [
+      `You have ${noteCount} note${noteCount === 1 ? "" : "s"} and ${reminderCount} reminder${reminderCount === 1 ? "" : "s"}.`,
+      topReminder ? `Top reminder: ${topReminder}` : "No active reminders.",
+      aiOnline ? "AI backend is online." : "AI backend is in local mode."
+    ].join(" ");
+  }
+
+  if (lower === "clear memory") {
     memory = [];
     renderMemory();
+    saveState();
     return "Memory cleared.";
   }
 
+  if (lower === "clear notes") {
+    notes = [];
+    renderTools();
+    saveState();
+    return "Notes cleared.";
+  }
+
+  if (lower === "clear reminders") {
+    reminders = [];
+    renderTools();
+    saveState();
+    return "Reminders cleared.";
+  }
+
+  if (lower === "list notes" || lower === "show notes") {
+    if (!notes.length) {
+      return "You do not have any notes yet.";
+    }
+    return `Notes: ${notes.map((note, index) => `${index + 1}. ${note.text}`).join(" ")}`;
+  }
+
+  if (lower === "list reminders" || lower === "show reminders") {
+    if (!reminders.length) {
+      return "You do not have any reminders yet.";
+    }
+    return `Reminders: ${reminders.map((reminder, index) => `${index + 1}. ${reminder.text}`).join(" ")}`;
+  }
+
+  const noteMatch = trimmed.match(/^(?:note|add note|take note)\s+(.+)/i);
+  if (noteMatch) {
+    const text = noteMatch[1].trim();
+    notes.unshift(createEntry(text));
+    renderTools();
+    saveState();
+    return `Noted: ${text}`;
+  }
+
+  const reminderMatch = trimmed.match(/^(?:remind me to|remind|add reminder)\s+(.+)/i);
+  if (reminderMatch) {
+    const text = reminderMatch[1].trim();
+    reminders.unshift(createEntry(text));
+    renderTools();
+    saveState();
+    return `Reminder added: ${text}`;
+  }
+
   if (lower.startsWith("remember ")) {
-    const item = command.replace(/^remember\s+/i, "").trim();
+    const item = trimmed.replace(/^remember\s+/i, "").trim();
     if (item) {
       memory.unshift(item);
       memory = [...new Set(memory)].slice(0, 10);
       renderMemory();
+      saveState();
       return `Remembered: ${item}`;
     }
   }
@@ -102,7 +199,7 @@ function localReply(command) {
   }
 
   if (lower.includes("what can you do") || lower.includes("abilities")) {
-    return "I can take typed or spoken commands, speak replies, store lightweight memory, summarize status, and route requests to an OpenAI backend when an API key is configured.";
+    return "I can answer with AI, speak replies, store memory, save notes, keep reminders, give a daily brief, and open simple browser commands.";
   }
 
   if (lower.includes("open google")) {
@@ -118,7 +215,11 @@ function localReply(command) {
     return `Today is ${new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" })}.`;
   }
 
-  return "I can handle that as a local command once we add the tool. For now, I have captured it in the mission log.";
+  return null;
+}
+
+function localReply(command) {
+  return runTool(command) || "I can handle that as a local command once we add the tool. For now, I have captured it in the mission log.";
 }
 
 async function remoteReply() {
@@ -127,7 +228,14 @@ async function remoteReply() {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       messages,
-      memory: memory.map(item => `- ${item}`).join("\n")
+      memory: [
+        "Memory:",
+        ...memory.map(item => `- ${item}`),
+        "Notes:",
+        ...notes.slice(0, 10).map(note => `- ${note.text}`),
+        "Reminders:",
+        ...reminders.slice(0, 10).map(reminder => `- ${reminder.text}`)
+      ].join("\n")
     })
   });
 
@@ -151,10 +259,15 @@ async function handleCommand(command) {
 
   let reply;
   try {
-    if (aiOnline) {
+    const toolReply = runTool(command);
+    if (toolReply) {
+      reply = toolReply;
+    } else if (aiOnline) {
       directive.textContent = "Thinking.";
+      reply = await remoteReply();
+    } else {
+      reply = localReply(command);
     }
-    reply = aiOnline ? await remoteReply() : localReply(command);
   } catch (error) {
     reply = `${localReply(command)} Backend note: ${error.message}`;
   } finally {
@@ -198,6 +311,7 @@ function setupVoiceInput() {
 async function boot() {
   setupVoiceInput();
   renderMemory();
+  renderTools();
 
   messages.forEach(message => {
     const node = document.createElement("article");

@@ -59,6 +59,13 @@ When smart mode is active, the Systems panel shows the model name instead of
 - `status report`
 - `what can you do`
 - `remember ...`
+- `note ...`
+- `list notes`
+- `clear notes`
+- `remind me to ...`
+- `list reminders`
+- `clear reminders`
+- `daily brief`
 - `clear memory`
 - `time`
 - `date`
