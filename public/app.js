@@ -7,6 +7,10 @@ const statusText = document.querySelector("#statusText");
 const aiStatus = document.querySelector("#aiStatus");
 const voiceInputStatus = document.querySelector("#voiceInputStatus");
 const voiceOutputStatus = document.querySelector("#voiceOutputStatus");
+const overdueCount = document.querySelector("#overdueCount");
+const todayCount = document.querySelector("#todayCount");
+const notesCount = document.querySelector("#notesCount");
+const nextAction = document.querySelector("#nextAction");
 const memoryList = document.querySelector("#memoryList");
 const notesList = document.querySelector("#notesList");
 const remindersList = document.querySelector("#remindersList");
@@ -107,7 +111,80 @@ function renderMemory() {
   });
 }
 
-function renderToolList(list, items, emptyText) {
+function renderDashboard() {
+  const overdue = overdueReminders();
+  const dueToday = dueRemindersFor();
+  const active = activeReminders();
+  const nextReminder = [...active]
+    .filter(reminder => reminder.dueAt)
+    .sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt))[0];
+
+  overdueCount.textContent = String(overdue.length);
+  todayCount.textContent = String(dueToday.length);
+  notesCount.textContent = String(activeNotes().length);
+  nextAction.textContent = overdue[0]?.text || dueToday[0]?.text || nextReminder?.text || "Nothing urgent.";
+}
+
+function activeNotes() {
+  return notes.filter(note => !note.deletedAt);
+}
+
+function createToolAction(label, title, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "mini-action";
+  button.textContent = label;
+  button.title = title;
+  button.setAttribute("aria-label", title);
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function removeNote(id) {
+  const note = notes.find(item => item.id === id);
+  if (note) {
+    note.deletedAt = new Date().toISOString();
+  }
+  renderTools();
+  saveState();
+  scheduleSync();
+  addMessage("assistant", note ? `Deleted note: ${note.text}` : "Note deleted.");
+}
+
+function completeReminderById(id) {
+  const reminder = reminders.find(item => item.id === id);
+  if (!reminder) {
+    addMessage("assistant", "I could not find that reminder.");
+    return;
+  }
+
+  if (reminder.repeat === "weekly" && reminder.dueAt) {
+    const next = new Date(reminder.dueAt);
+    next.setDate(next.getDate() + 7);
+    reminder.dueAt = next.toISOString();
+    addMessage("assistant", `Completed and rescheduled: ${formatEntry(reminder)}`);
+  } else {
+    reminder.completedAt = new Date().toISOString();
+    addMessage("assistant", `Completed: ${reminder.text}`);
+  }
+
+  renderTools();
+  saveState();
+  scheduleSync();
+}
+
+function removeReminder(id) {
+  const reminder = reminders.find(item => item.id === id);
+  if (reminder) {
+    reminder.deletedAt = new Date().toISOString();
+  }
+  renderTools();
+  saveState();
+  scheduleSync();
+  addMessage("assistant", reminder ? `Deleted reminder: ${reminder.text}` : "Reminder deleted.");
+}
+
+function renderToolList(list, items, emptyText, type) {
   list.innerHTML = "";
   if (!items.length) {
     const item = document.createElement("li");
@@ -118,14 +195,29 @@ function renderToolList(list, items, emptyText) {
 
   items.slice(0, 6).forEach(entry => {
     const item = document.createElement("li");
-    item.textContent = formatEntry(entry);
+    item.className = "tool-row";
+    const text = document.createElement("span");
+    text.textContent = formatEntry(entry);
+    item.appendChild(text);
+
+    const actions = document.createElement("span");
+    actions.className = "tool-actions";
+    if (type === "note") {
+      actions.appendChild(createToolAction("X", `Delete note: ${entry.text}`, () => removeNote(entry.id)));
+    }
+    if (type === "reminder") {
+      actions.appendChild(createToolAction("Done", `Complete reminder: ${entry.text}`, () => completeReminderById(entry.id)));
+      actions.appendChild(createToolAction("X", `Delete reminder: ${entry.text}`, () => removeReminder(entry.id)));
+    }
+    item.appendChild(actions);
     list.appendChild(item);
   });
 }
 
 function renderTools() {
-  renderToolList(notesList, notes, "No notes yet.");
-  renderToolList(remindersList, activeReminders(), "No reminders yet.");
+  renderDashboard();
+  renderToolList(notesList, activeNotes(), "No notes yet.", "note");
+  renderToolList(remindersList, activeReminders(), "No reminders yet.", "reminder");
 }
 
 function createEntry(text) {
@@ -262,7 +354,7 @@ function cleanReminderText(text) {
 }
 
 function activeReminders() {
-  return reminders.filter(reminder => !reminder.completedAt);
+  return reminders.filter(reminder => !reminder.completedAt && !reminder.deletedAt);
 }
 
 function dueRemindersFor(date = new Date()) {
@@ -300,7 +392,8 @@ function mergeEntries(existing = [], incoming = []) {
       createdAt: entry.createdAt || new Date().toISOString(),
       dueAt: entry.dueAt || null,
       repeat: entry.repeat || null,
-      completedAt: entry.completedAt || null
+      completedAt: entry.completedAt || null,
+      deletedAt: entry.deletedAt || null
     });
   }
   return [...merged.values()]
@@ -575,7 +668,7 @@ function runTool(command) {
   const lower = trimmed.toLowerCase();
 
   if (lower === "daily brief" || lower === "briefing" || lower === "brief") {
-    const noteCount = notes.length;
+    const noteCount = activeNotes().length;
     const activeCount = activeReminders().length;
     const dueToday = dueRemindersFor();
     const overdue = overdueReminders();
@@ -599,29 +692,35 @@ function runTool(command) {
   if (lower === "clear memory") {
     memory = [];
     renderMemory();
+    renderDashboard();
     saveState();
     return "Memory cleared.";
   }
 
   if (lower === "clear notes") {
-    notes = [];
+    const deletedAt = new Date().toISOString();
+    notes = notes.map(note => ({ ...note, deletedAt }));
     renderTools();
     saveState();
+    scheduleSync();
     return "Notes cleared.";
   }
 
   if (lower === "clear reminders") {
-    reminders = [];
+    const deletedAt = new Date().toISOString();
+    reminders = reminders.map(reminder => ({ ...reminder, deletedAt }));
     renderTools();
     saveState();
+    scheduleSync();
     return "Reminders cleared.";
   }
 
   if (lower === "list notes" || lower === "show notes") {
-    if (!notes.length) {
+    const active = activeNotes();
+    if (!active.length) {
       return "You do not have any notes yet.";
     }
-    return `Notes: ${notes.map((note, index) => `${index + 1}. ${note.text}`).join(" ")}`;
+    return `Notes: ${active.map((note, index) => `${index + 1}. ${note.text}`).join(" ")}`;
   }
 
   if (lower === "list reminders" || lower === "show reminders") {
@@ -706,6 +805,7 @@ function runTool(command) {
       memory.unshift(item);
       memory = [...new Set(memory)].slice(0, 10);
       renderMemory();
+      renderDashboard();
       saveState();
       scheduleSync();
       return `Remembered: ${item}`;
@@ -751,7 +851,7 @@ async function remoteReply() {
         "Memory:",
         ...memory.map(item => `- ${item}`),
         "Notes:",
-        ...notes.slice(0, 10).map(note => `- ${note.text}`),
+        ...activeNotes().slice(0, 10).map(note => `- ${note.text}`),
         "Reminders:",
         ...activeReminders().slice(0, 10).map(reminder => `- ${formatEntry(reminder)}`)
       ].join("\n")

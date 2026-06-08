@@ -45,6 +45,25 @@
           <button data-command="remember I prefer concise answers">Remember</button>
         </section>
 
+        <section class="dashboard" aria-label="Today dashboard">
+          <div class="dashboard-item">
+            <span>Overdue</span>
+            <strong id="overdueCount">0</strong>
+          </div>
+          <div class="dashboard-item">
+            <span>Due Today</span>
+            <strong id="todayCount">0</strong>
+          </div>
+          <div class="dashboard-item">
+            <span>Notes</span>
+            <strong id="notesCount">0</strong>
+          </div>
+          <div class="dashboard-item wide">
+            <span>Next Action</span>
+            <strong id="nextAction">Nothing urgent.</strong>
+          </div>
+        </section>
+
         <section class="conversation" id="conversation" aria-live="polite"></section>
 
         <form class="composer" id="composer">

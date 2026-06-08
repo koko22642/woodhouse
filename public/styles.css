@@ -53,7 +53,7 @@ input {
 
 .console {
   display: grid;
-  grid-template-rows: auto auto auto minmax(220px, 1fr) auto;
+  grid-template-rows: auto auto auto auto minmax(220px, 1fr) auto;
   min-height: calc(100vh - 32px);
 }
 
@@ -198,6 +198,40 @@ h2 {
   border-bottom: 1px solid var(--line);
 }
 
+.dashboard {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) 1.5fr;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dashboard-item {
+  min-height: 76px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #101720;
+}
+
+.dashboard-item span {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.dashboard-item strong {
+  display: block;
+  color: var(--text);
+  font-size: 1.3rem;
+  line-height: 1.2;
+}
+
+.dashboard-item.wide strong {
+  font-size: 1rem;
+}
+
 button {
   min-height: 42px;
   border: 1px solid rgba(94, 231, 255, 0.24);
@@ -321,6 +355,24 @@ input:focus {
   color: var(--muted);
 }
 
+.tool-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.mini-action {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 0.78rem;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -351,6 +403,14 @@ input:focus {
   .quick-actions {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .dashboard {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-item.wide {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 520px) {
@@ -374,6 +434,10 @@ input:focus {
   }
 
   .quick-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard {
     grid-template-columns: 1fr;
   }
 

@@ -138,7 +138,8 @@ function normalizeEntry(entry) {
     createdAt: cleanText(entry.createdAt) || new Date().toISOString(),
     dueAt: cleanText(entry.dueAt) || null,
     repeat: cleanText(entry.repeat) || null,
-    completedAt: cleanText(entry.completedAt) || null
+    completedAt: cleanText(entry.completedAt) || null,
+    deletedAt: cleanText(entry.deletedAt) || null
   };
 }
 
@@ -194,11 +195,13 @@ function mergeStore(existing, incoming) {
 
 function activeDueReminders(reminders = []) {
   const now = new Date();
-  return reminders.filter(reminder => !reminder.completedAt && reminder.dueAt && new Date(reminder.dueAt) <= now);
+  return reminders.filter(
+    reminder => !reminder.completedAt && !reminder.deletedAt && reminder.dueAt && new Date(reminder.dueAt) <= now
+  );
 }
 
 function activeReminders(reminders = []) {
-  return reminders.filter(reminder => !reminder.completedAt);
+  return reminders.filter(reminder => !reminder.completedAt && !reminder.deletedAt);
 }
 
 function formatReminder(reminder, timezone = WOODHOUSE_TIMEZONE) {
